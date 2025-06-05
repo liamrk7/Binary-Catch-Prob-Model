@@ -1,0 +1,116 @@
+library(dplyr)
+library(caret)
+library(ranger)
+
+BattedBalls = X2024Atlantic %>%
+  filter(!is.na(ExitSpeed)) %>%
+  filter(!is.na(Angle)) %>%
+  filter(!is.na(Direction)) %>%
+  filter(!is.na(HitSpinRate)) %>%
+  filter(!is.na(HitSpinAxis)) %>%
+  filter(!is.na(Distance)) %>%
+  filter(!is.na(HangTime)) %>%
+  filter(PlayResult != "HomeRun") %>%
+  distinct() %>%
+  filter(PitcherTeam != BatterTeam)
+
+BattedBalls = BattedBalls %>% mutate(Out = case_when(
+  PlayResult == "Out" ~ 1,
+  PlayResult == "Sacrifice" ~ 1,
+  PlayResult == "FieldersChoice" ~ 1,
+  TRUE ~ 0
+))
+
+BattedBalls$Out <- as.factor(BattedBalls$Out)
+
+rf_model <- ranger(
+  formula = Out ~ ExitSpeed + Angle + Direction + HitSpinRate + Distance + HangTime + HitSpinAxis,
+  data = BattedBalls,
+  num.trees = 500,    
+  mtry = 5,
+  importance = "impurity",
+  probability = FALSE,
+  classification = TRUE
+)
+
+print(rf_model)
+
+rf_model$variable.importance
+
+BattedBalls2025 = X2025Atlantic %>%
+  filter(!is.na(ExitSpeed)) %>%
+  filter(!is.na(Angle)) %>%
+  filter(!is.na(Direction)) %>%
+  filter(!is.na(HitSpinRate)) %>%
+  filter(!is.na(Distance)) %>%
+  filter(!is.na(HangTime)) %>%
+  filter(PitcherTeam != BatterTeam) %>%
+  filter(PlayResult != "HomeRun") %>%
+  distinct()
+
+BattedBalls2025 = BattedBalls2025 %>% mutate(Out = case_when(
+  PlayResult == "Out" ~ 1,
+  PlayResult == "Sacrifice" ~ 1,
+  PlayResult == "FieldersChoice" ~ 1,
+  TRUE ~ 0
+))
+
+BattedBalls2025$Out <- as.factor(BattedBalls2025$Out)
+
+preds_2025 <- predict(rf_model, data = BattedBalls2025)
+
+predicted_classes <- preds_2025$predictions
+
+confusionMatrix(preds_2025$predictions, BattedBalls2025$Out)
+
+saveRDS(rf_model, "BinaryAtlanticCatchProbModelv1.rds")
+
+BattedBalls2025$PredictedClass <- predict(rf_model, data = BattedBalls2025)$predictions
+
+BattedBallsTeam = BattedBalls2025 %>% group_by(PitcherTeam) %>%
+  summarise(
+    BattedBallEvents = n(),
+    PredOuts = sum(as.numeric(as.character(PredictedClass))),
+    Outs = sum(as.numeric(as.character(Out))),
+    OAA = Outs - PredOuts
+  )
+
+BattedBallInf = BattedBalls2025 %>% filter(Distance < 120) %>% group_by(PitcherTeam) %>%
+  summarise(
+    BattedBallEvents = n(),
+    PredOuts = sum(as.numeric(as.character(PredictedClass))),
+    Outs = sum(as.numeric(as.character(Out))),
+    OAA = Outs - PredOuts
+  )
+
+BattedBallOF = BattedBalls2025 %>% filter(Distance > 120) %>% group_by(PitcherTeam) %>%
+  summarise(
+    BattedBallEvents = n(),
+    PredOuts = sum(as.numeric(as.character(PredictedClass))),
+    Outs = sum(as.numeric(as.character(Out))),
+    OAA = Outs - PredOuts
+  )
+
+BattedBalls2025 = BattedBalls2025 %>%
+  mutate(Responsibility = case_when(
+    Direction > 30 & Distance < 110 ~ "First",
+    Direction < 30 & Direction > 0 & Distance < 110 ~ "Second",
+    Direction < 0 & Direction > -30 & Distance < 110 ~ "Short",
+    Direction < -30 & Distance < 110 ~ "Third",
+    Direction > 20 & Distance > 110 ~ "Right",
+    Direction < -20 & Distance > 110 ~ "Left",
+    Direction > -20 & Direction < 20 & Distance > 110 ~ "Center",
+    TRUE ~ "Did Smth Wrong"
+  ))
+
+BattedBallResp = BattedBalls2025 %>% group_by(Responsibility) %>%
+  summarise(
+    BattedBallEvents = n(),
+    PredOuts = sum(as.numeric(as.character(PredictedClass))),
+    Outs = sum(as.numeric(as.character(Out))),
+    OAA = Outs - PredOuts,
+    FieldPct = Outs/BattedBallEvents
+  )
+Upper <- 3.3773
+Lower <- 1.5 
+Side <- 0.83083
